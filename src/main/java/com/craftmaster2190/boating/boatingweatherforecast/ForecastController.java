@@ -24,7 +24,7 @@ public class ForecastController {
   private final TomorrowIOClient tomorrowIOClient;
   private final ObjectMapper objectMapper;
 
-  public static void forForecasts(List<TomorrowIOClient.Forecast> forecasts, BiConsumer<HighLow, HighLow> consumerCAndF) {
+  public static void forForecasts(List<TomorrowIOClient.Forecast> forecasts, ToDoubleFunction<TomorrowIOClient.Forecast> function, Consumer<HighLow> consumer) {
     Function<ToDoubleFunction<TomorrowIOClient.Forecast>, DoubleStream> toDoubleStream = (func) -> forecasts
         .stream()
         .mapToDouble(func);
@@ -35,8 +35,11 @@ public class ForecastController {
         .orElseThrow(IllegalStateException::new),
         toDoubleStream.apply(func).min().orElseThrow(IllegalStateException::new));
 
-    consumerCAndF.accept(toHighLow.apply(TomorrowIOClient.Forecast::getTemperatureC),
-        toHighLow.apply(TomorrowIOClient.Forecast::getTemperatureF));
+    consumer.accept(toHighLow.apply(function));
+
+    //
+    //    consumerCAndF.accept(toHighLow.apply(TomorrowIOClient.Forecast::getTemperatureC),
+    //        toHighLow.apply(TomorrowIOClient.Forecast::getTemperatureF));
   }
 
   public static double linearInterpolateToPercent(double low, double high, double value) {
@@ -52,12 +55,7 @@ public class ForecastController {
     val forecastResponse = new ForecastResponse().setUtahLocation(utahLocation);
 
     return Flux
-        .concat(Flux
-                .concat(tomorrowIOClient.getForecast(utahLocation, TomorrowIOClient.Timestep.EVERY_HOUR),
-                    tomorrowIOClient.getForecast(utahLocation, TomorrowIOClient.Timestep.EVERY_DAY))
-                .collectList()
-                .map(listOfLists -> listOfLists.stream().flatMap(Collection::stream).collect(Collectors.toList()))
-                .doOnSuccess(forecastResponse::setWeatherForecast),
+        .concat(tomorrowIOClient.getForecast(utahLocation).doOnSuccess(forecastResponse::setWeatherForecast),
             lakeMonsterClient.getCurrentConditions(utahLocation).doOnSuccess(forecastResponse::setWaterConditions))
         .collectList()
         .thenReturn(forecastResponse);
@@ -104,8 +102,14 @@ public class ForecastController {
                   .setUtahLocation(scoredForecastResponse.getUtahLocation())
                   .setWaterConditions(scoredForecastResponse.getWaterConditions());
 
+              forForecasts(forecasts, TomorrowIOClient.Forecast::getTemperatureC, forecastResponse::setHighLowC);
+              forForecasts(forecasts, TomorrowIOClient.Forecast::getTemperatureF, forecastResponse::setHighLowF);
               forForecasts(forecasts,
-                  (highLowC, highLowF) -> forecastResponse.setHighLowC(highLowC).setHighLowF(highLowF));
+                  TomorrowIOClient.Forecast::getWindSpeedKph,
+                  forecastResponse::setHighLowWindSpeedKph);
+              forForecasts(forecasts,
+                  TomorrowIOClient.Forecast::getWindSpeedMph,
+                  forecastResponse::setHighLowWindSpeedMph);
 
               cacheMap.get(date).add(forecastResponse);
             });
@@ -150,12 +154,7 @@ public class ForecastController {
             wind,
             0,
             20,
-            forecastResponse -> forecastResponse
-                .getWeatherForecast()
-                .stream()
-                .mapToDouble(TomorrowIOClient.Forecast::getWindSpeedMph)
-                .max()
-                .orElseThrow(IllegalStateException::new)),
+            forecastResponse -> forecastResponse.getHighLowWindSpeedMph().getHigh()),
         new ScoringCategory<>("waterTempHigh",
             waterTempHigh,
             80,
@@ -250,6 +249,8 @@ public class ForecastController {
     private double distanceMiles;
     private double score;
     private List<String> scoringDebug;
+    private HighLow highLowWindSpeedKph;
+    private HighLow highLowWindSpeedMph;
     private HighLow highLowC;
     private HighLow highLowF;
   }

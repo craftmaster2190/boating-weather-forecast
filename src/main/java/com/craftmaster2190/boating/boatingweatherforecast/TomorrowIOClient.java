@@ -23,8 +23,8 @@ public class TomorrowIOClient {
   private final BoatingWeatherAppConfig appConfig;
   private final CacheService cacheService;
 
-  public Mono<List<Forecast>> getForecast(UtahLocation utahLocation, Timestep timestep) {
-    val cacheKey = REDIS_PREFIX + utahLocation.name() + timestep.name();
+  public Mono<List<Forecast>> getForecast(UtahLocation utahLocation) {
+    val cacheKey = REDIS_PREFIX + utahLocation.name();
     {
       List<Forecast> cachedValue = cacheService.get(cacheKey);
       if (cachedValue != null) {
@@ -33,16 +33,15 @@ public class TomorrowIOClient {
     }
 
     val start = Instant.now();
-    log.info("START getForecast({}, {})", utahLocation, timestep);
+    log.info("START getForecast({})", utahLocation);
     final LatLong location = utahLocation.getLocation();
     return webClient
         .get()
         .uri(String.format(
-            "%s?location=%s,%s&fields=temperature,windSpeed,precipitationProbability&timesteps=%s&units=metric&apikey=%s",
+            "%s?location=%s,%s&fields=temperature,windSpeed,precipitationProbability&timesteps=1h,1d&units=metric&apikey=%s",
             TOMORROW_API_URI,
             location.getLatitude(),
             location.getLongitude(),
-            timestep.getCode(),
             appConfig.getTomorrowIoAccessKey()))
         .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
         .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
@@ -64,20 +63,30 @@ public class TomorrowIOClient {
                 webClientResponseException.getResponseBodyAsString());
           }
         })
-        .map(tomorrowIOResponse -> transform(tomorrowIOResponse, timestep))
+        .map(this::transform)
         .doOnSuccess(value -> {
           cacheService.put(cacheKey, value);
-          log.info("DONE getForecast({}, {}) {}", utahLocation, timestep, Duration.between(start, Instant.now()));
+          log.info("DONE getForecast({}) {}", utahLocation, Duration.between(start, Instant.now()));
+        })
+        .flatMap(value -> {
+          val duration = Duration.between(start, Instant.now());
+          val oneSecond = Duration.ofSeconds(1);
+          if (duration.compareTo(oneSecond) < 0) {
+            final Duration sleepDelay = oneSecond.minus(duration);
+            log.info("getForecast SLEEPING {} to make TomorrowIO API rate limiting happy.", sleepDelay);
+            return Mono.just(value).delayElement(sleepDelay); // Add delay to make TomorrowIO RateLimiting happy
+          }
+          return Mono.just(value);
         });
   }
 
-  public List<Forecast> transform(TomorrowIOResponse tomorrowIOResponse, Timestep timestep) {
+  public List<Forecast> transform(TomorrowIOResponse tomorrowIOResponse) {
     return tomorrowIOResponse
         .getData()
         .getTimelines()
         .stream()
         .flatMap(timeline -> timeline.getIntervals().stream())
-        .filter(interval -> timestep != Timestep.EVERY_HOUR || isBetweenBoatingHours(interval))
+        .filter(this::isBetweenBoatingHours)
         .map(interval -> {
           val values = interval.getValues();
           return new Forecast()
@@ -94,14 +103,6 @@ public class TomorrowIOClient {
   private boolean isBetweenBoatingHours(TomorrowIOResponse.TomorrowIOData.Timeline.Interval interval) {
     val hour = interval.getStartTime().atZone(AMERICA_DENVER).getHour();
     return (hour >= 8 && hour <= 20);
-  }
-
-  @Getter
-  @RequiredArgsConstructor
-  public enum Timestep {
-    EVERY_HOUR("1h"), EVERY_DAY("1d");
-
-    private final String code;
   }
 
   @Data

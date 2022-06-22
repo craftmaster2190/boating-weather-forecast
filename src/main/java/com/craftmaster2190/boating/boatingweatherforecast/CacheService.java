@@ -35,6 +35,6 @@ public class CacheService {
   }
 
   public <T> void put(String key, T value) {
-    redissonClient.getBucket(REDIS_PREFIX + key).set(value, 1, TimeUnit.DAYS);
+    redissonClient.getBucket(REDIS_PREFIX + key).set(value, 12, TimeUnit.HOURS);
   }
 }
