@@ -12,7 +12,7 @@ let getLocationPromise = () => {
 async function main() {
     const position = await getLocationPromise();
     console.log(position.coords);
-    const response = await fetch(`best?results=15&latitude=${position.coords.latitude}&longitude=${position.coords.longitude}`);
+    const response = await fetch(`best?results=5&latitude=${position.coords.latitude}&longitude=${position.coords.longitude}`);
     const body = await response.json();
     // console.log(body);
     Object.keys(body).sort()

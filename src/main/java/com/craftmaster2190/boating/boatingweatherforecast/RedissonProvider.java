@@ -19,7 +19,7 @@ public class RedissonProvider {
   public RedissonClient redissonClient() {
     val config = new Config();
     config.setCodec(new JsonJacksonCodec(objectMapper));
-    config.useSingleServer().setAddress("redis://" + appConfig.getRedisHost() + ":" + appConfig.getRedisPort());
+    config.useSingleServer().setAddress(appConfig.getRedisUrl()).setConnectionMinimumIdleSize(2);
     config.setThreads(2);
     return Redisson.create(config);
   }

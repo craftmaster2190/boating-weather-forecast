@@ -5,9 +5,8 @@ import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.*;
 import reactor.core.publisher.Mono;
-import reactor.util.retry.Retry;
 
 import java.time.*;
 import java.util.List;
@@ -47,9 +46,24 @@ public class TomorrowIOClient {
             appConfig.getTomorrowIoAccessKey()))
         .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
         .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+        //        .exchangeToMono(clientResponse -> {
+        //          if (!clientResponse.statusCode().isError()) {
+        //            return clientResponse.bodyToMono(TomorrowIOResponse.class);
+        //          }
+        //          return clientResponse.toBodilessEntity().then(Mono.)
+        //        })
         .retrieve()
         .bodyToMono(TomorrowIOResponse.class)
-        .retryWhen(Retry.backoff(3, Duration.ofSeconds(3)))
+        //        .retryWhen(Retry.backoff(3, Duration.ofSeconds(3)))
+        .doOnError(throwable -> {
+          if (throwable instanceof WebClientResponseException) {
+            val webClientResponseException = (WebClientResponseException) throwable;
+            log.error("Error Response {} Headers: {} {}",
+                webClientResponseException.getStatusCode(),
+                webClientResponseException.getHeaders(),
+                webClientResponseException.getResponseBodyAsString());
+          }
+        })
         .map(tomorrowIOResponse -> transform(tomorrowIOResponse, timestep))
         .doOnSuccess(value -> {
           cacheService.put(cacheKey, value);
