@@ -1,0 +1,15 @@
+body {
+    display: flex;
+    flex-direction: row;
+    gap: 12px
+}
+
+.date {
+    display: flex;
+    flex-direction: column;
+}
+
+.lake {
+    display: flex;
+    flex-direction: column;
+}
