@@ -9,12 +9,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.*;
 
-import java.time.LocalDate;
+import java.time.*;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.function.*;
 import java.util.stream.*;
+
+import static com.craftmaster2190.boating.boatingweatherforecast.TomorrowIOClient.AMERICA_DENVER;
 
 @Slf4j
 @RestController
@@ -82,25 +84,32 @@ public class ForecastController {
             .setWaterConditions(forecastResponse.getWaterConditions()))))
         .collectList()
         .map(listOfClosestDestinations -> {
-          LoadingCache<LocalDate, Deque<ScoredForecastResponse>> cacheMap = Caffeine
+          LoadingCache<LocalDate, Deque<ScoredForecastResponse>> day2CollectionOfForecastsForThatDayCacheMap = Caffeine
               .newBuilder()
               .build(key -> new ConcurrentLinkedDeque<>());
 
           listOfClosestDestinations.forEach(scoredForecastResponse -> {
-            final Map<LocalDate, List<TomorrowIOClient.Forecast>> collect = scoredForecastResponse
+            final Map<LocalDate, List<TomorrowIOClient.Forecast>> day2weatherForecastCollection = scoredForecastResponse
                 .getWeatherForecast()
                 .stream()
                 .collect(Collectors.groupingBy(weatherForecast -> weatherForecast
                     .getStartTime()
                     .truncatedTo(ChronoUnit.DAYS)
                     .toLocalDate()));
-            collect.forEach((date, forecasts) -> {
+
+            final Map<LocalDate, List<LakeMonsterClient.DatedWaterTemp>> day2WaterForecast = scoredForecastResponse
+                .getWaterConditions()
+                .getWaterForecastTemp()
+                .stream()
+                .collect(Collectors.groupingBy(LakeMonsterClient.DatedWaterTemp::getDate));
+
+            day2weatherForecastCollection.forEach((date, forecasts) -> {
               val forecastResponse = (ScoredForecastResponse) new ScoredForecastResponse()
                   .setDistanceKilometers(scoredForecastResponse.getDistanceKilometers())
                   .setDistanceMiles(scoredForecastResponse.getDistanceMiles())
                   .setWeatherForecast(forecasts)
-                  .setUtahLocation(scoredForecastResponse.getUtahLocation())
-                  .setWaterConditions(scoredForecastResponse.getWaterConditions());
+                  .setUtahLocation(scoredForecastResponse.getUtahLocation());
+              //                  .setWaterConditions(scoredForecastResponse.getWaterConditions());
 
               forForecasts(forecasts, TomorrowIOClient.Forecast::getTemperatureC, forecastResponse::setHighLowC);
               forForecasts(forecasts, TomorrowIOClient.Forecast::getTemperatureF, forecastResponse::setHighLowF);
@@ -111,11 +120,33 @@ public class ForecastController {
                   TomorrowIOClient.Forecast::getWindSpeedMph,
                   forecastResponse::setHighLowWindSpeedMph);
 
-              cacheMap.get(date).add(forecastResponse);
+              val waterForecastTempList = day2WaterForecast.get(date);
+              val waterConditions = new LakeMonsterClient.WaterConditions().setWaterForecastTemp(waterForecastTempList);
+              if (date.equals(Instant.now().atZone(AMERICA_DENVER).toLocalDate())) {
+                waterConditions.setDescription(scoredForecastResponse.getWaterConditions().getDescription());
+                waterConditions.setHighLowF(scoredForecastResponse.getWaterConditions().getHighLowF());
+                waterConditions.setHighLowC(scoredForecastResponse.getWaterConditions().getHighLowC());
+              }
+              else {
+                if (waterForecastTempList.size() != 1) {
+                  log.warn("waterForecastTempList.size = {} on date = {} at {}",
+                      waterForecastTempList.size(),
+                      date,
+                      scoredForecastResponse.getUtahLocation());
+                }
+                val tempF = waterForecastTempList.get(0).getTempF();
+                val tempC = waterForecastTempList.get(0).getTempC();
+                waterConditions.setHighLowF(new HighLow(tempF, tempF)).setHighLowC(new HighLow(tempC, tempC));
+              }
+
+              //              scoredForecastResponse.getWaterConditions()
+              forecastResponse.setWaterConditions(waterConditions);
+
+              day2CollectionOfForecastsForThatDayCacheMap.get(date).add(forecastResponse);
             });
           });
 
-          return cacheMap
+          return day2CollectionOfForecastsForThatDayCacheMap
               .asMap()
               .entrySet()
               .stream()
@@ -138,7 +169,7 @@ public class ForecastController {
     val waterTempHigh = 200;
     val weatherHigh = 100;
     val noModifiers = 100; // High = 0, Low = 1
-    val distance = 175; // High = 0, Low 100
+    val distance = 75; // High = 0, Low 100
 
     val scorer = new Scorer<ScoredForecastResponse>(new ScoringCategory<>("precipitation",
         precipitation,
@@ -153,7 +184,7 @@ public class ForecastController {
         new ScoringCategory<>("wind",
             wind,
             0,
-            20,
+            11,
             forecastResponse -> forecastResponse.getHighLowWindSpeedMph().getHigh()),
         new ScoringCategory<>("waterTempHigh",
             waterTempHigh,
@@ -164,20 +195,26 @@ public class ForecastController {
             weatherHigh,
             90,
             50,
-            forecastResponse -> forecastResponse.getWaterConditions().getHighLowF().getHigh()),
+            forecastResponse -> forecastResponse.getHighLowF().getHigh()),
         new ScoringCategory<>("noModifiers",
             noModifiers,
             0,
             1,
             forecastResponse -> forecastResponse.getUtahLocation().getLakeModifiers().getLakeModifiers().length),
-        new ScoringCategory<>("distance", distance, 0, 40, forecastResponse -> forecastResponse.getDistanceMiles()));
+        new ScoringCategory<>("distance", distance, 0, 40, ScoredForecastResponse::getDistanceMiles));
 
     return scoredForecastResponse.setScore(scorer.score(scoredForecastResponse));
   }
 
+  public interface HasScoringDebug<T> {
+    T setScoringDebug(List<String> scoringDebug);
+
+    List<String> getScoringDebug();
+  }
+
   @Slf4j
   @Value
-  public static class Scorer<T> {
+  public static class Scorer<T extends HasScoringDebug<T>> {
     ScoringCategory<T>[] scoringCategories;
     private final double sumOfAllWeights;
 
@@ -193,14 +230,17 @@ public class ForecastController {
         double interpolatedValue = linearInterpolateToPercent(category.getLow(), category.getHigh(), value);
         double partialScore = weightedPercent * interpolatedValue;
 
-        log.info("Score({}) weight:{} * (low:{} < {} < high:{})[eval:{}] => partialScore:{}",
+        List<String> scoringDebug = Optional.ofNullable(object.getScoringDebug()).orElseGet(ArrayList::new);
+        scoringDebug.add(String.format("Score(%s) weight:%s * (low:%s < %s < high:%s)[eval:%s] => partialScore:%s",
             category.getDescription(),
             weightedPercent,
             category.getLow(),
             value,
             category.getHigh(),
             interpolatedValue,
-            partialScore);
+            partialScore));
+        object.setScoringDebug(scoringDebug);
+
         return partialScore;
       }).sum();
 
@@ -244,7 +284,7 @@ public class ForecastController {
   @EqualsAndHashCode(callSuper = true)
   @ToString(callSuper = true)
   @Accessors(chain = true)
-  public static class ScoredForecastResponse extends ForecastResponse {
+  public static class ScoredForecastResponse extends ForecastResponse implements HasScoringDebug<ScoredForecastResponse> {
     private double distanceKilometers;
     private double distanceMiles;
     private double score;

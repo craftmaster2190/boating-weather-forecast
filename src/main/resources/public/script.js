@@ -1,4 +1,4 @@
-let getLocationPromise = () => {
+const getLocationPromise = () => {
     return new Promise(function (resolve, reject) {
 
         // Promisifying the geolocation API
@@ -9,6 +9,8 @@ let getLocationPromise = () => {
     });
 };
 
+const DAY_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 async function main() {
     const position = await getLocationPromise();
     console.log(position.coords);
@@ -17,10 +19,12 @@ async function main() {
     // console.log(body);
     Object.keys(body).sort()
         .map(date => {
+            const dayOfWeek = DAY_OF_WEEK[new Date(date + "T00:00:00").getDay()];
+
             const data = body[date];
 
             const lakes = data.map(d => `<div class="lake">
-<h2>${d.name}</h2>
+<h3>${d.name}</h3>
 <div>Score: ${Math.round(d.score)}</div>
 <div>Air Temp: ${Math.round(d.highLowF.low)}-${Math.round(d.highLowF.high)}&deg; F</div>
 <div>Water Temp: ${Math.round(d.waterConditions.highLowF.low)}-${Math.round(d.waterConditions.highLowF.high)}&deg; F</div>
@@ -30,9 +34,11 @@ async function main() {
 
             jQuery("body").append(`<div class="date">
 <h1>${date}</h1>
+<h2>${dayOfWeek}</h2>
 ${lakes}
 </div>`);
         });
+    jQuery(".loading").remove();
 }
 
 function docReady(fn) {
