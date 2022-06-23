@@ -7,9 +7,10 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.*;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 import java.time.*;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -45,16 +46,31 @@ public class TomorrowIOClient {
             appConfig.getTomorrowIoAccessKey()))
         .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
         .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-        //        .exchangeToMono(clientResponse -> {
-        //          if (!clientResponse.statusCode().isError()) {
-        //            return clientResponse.bodyToMono(TomorrowIOResponse.class);
-        //          }
-        //          return clientResponse.toBodilessEntity().then(Mono.)
-        //        })
-        .retrieve()
-        .bodyToMono(TomorrowIOResponse.class)
-        //        .retryWhen(Retry.backoff(3, Duration.ofSeconds(3)))
-        .doOnError(throwable -> {
+        .exchangeToMono(clientResponse -> {
+          if (!clientResponse.statusCode().isError()) {
+            return clientResponse.bodyToMono(TomorrowIOResponse.class);
+          }
+          return clientResponse
+              .toBodilessEntity()
+              .flatMap(result -> Optional
+                  .ofNullable(result.getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                  .map(Integer::parseUnsignedInt)
+                  .filter(retrySeconds -> retrySeconds < 30)
+                  .map(retrySeconds -> {
+                    val sleepDelay = Duration.ofSeconds(retrySeconds);
+                    log.info("getForecast SLEEPING {} to make TomorrowIO API rate limiting happy.", sleepDelay);
+                    return Mono
+                        .<TomorrowIOResponse>error(WebClientResponseException.create(clientResponse.rawStatusCode(),
+                            clientResponse.statusCode().getReasonPhrase(),
+                            result.getHeaders(),
+                            null,
+                            null))
+                        .delayElement(sleepDelay);
+                  })
+                  .orElseGet(Mono::empty));
+        })
+        .retryWhen(Retry.max(1))
+        .onErrorResume(throwable -> {
           if (throwable instanceof WebClientResponseException) {
             val webClientResponseException = (WebClientResponseException) throwable;
             log.error("Error Response {} Headers: {} {}",
@@ -62,6 +78,7 @@ public class TomorrowIOClient {
                 webClientResponseException.getHeaders(),
                 webClientResponseException.getResponseBodyAsString());
           }
+          return Mono.empty();
         })
         .map(this::transform)
         .doOnSuccess(value -> {

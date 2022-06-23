@@ -119,6 +119,9 @@ public class ForecastController {
               forForecasts(forecasts,
                   TomorrowIOClient.Forecast::getWindSpeedMph,
                   forecastResponse::setHighLowWindSpeedMph);
+              forForecasts(forecasts,
+                  TomorrowIOClient.Forecast::getPrecipitationProbability,
+                  forecastResponse::setHighLowPrecipitationProbability);
 
               val waterForecastTempList = day2WaterForecast.get(date);
               val waterConditions = new LakeMonsterClient.WaterConditions().setWaterForecastTemp(waterForecastTempList);
@@ -175,12 +178,7 @@ public class ForecastController {
         precipitation,
         0,
         50,
-        forecastResponse -> forecastResponse
-            .getWeatherForecast()
-            .stream()
-            .mapToDouble(TomorrowIOClient.Forecast::getPrecipitationProbability)
-            .max()
-            .orElseThrow(IllegalStateException::new)),
+        forecastResponse -> forecastResponse.getHighLowPrecipitationProbability().getHigh()),
         new ScoringCategory<>("wind",
             wind,
             0,
@@ -293,6 +291,7 @@ public class ForecastController {
     private HighLow highLowWindSpeedMph;
     private HighLow highLowC;
     private HighLow highLowF;
+    private HighLow highLowPrecipitationProbability;
   }
 
 }

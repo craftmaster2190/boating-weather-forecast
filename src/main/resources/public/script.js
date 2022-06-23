@@ -29,6 +29,7 @@ async function main() {
 <div>Air Temp: ${Math.round(d.highLowF.low)}-${Math.round(d.highLowF.high)}&deg; F</div>
 <div>Water Temp: ${Math.round(d.waterConditions.highLowF.low)}-${Math.round(d.waterConditions.highLowF.high)}&deg; F</div>
 <div>Wind Speed: ${Math.round(d.highLowWindSpeedMph.low)}-${Math.round(d.highLowWindSpeedMph.high)} mph</div>
+<div>Precipitation: ${Math.round(d.highLowPrecipitationProbability.low)}-${Math.round(d.highLowPrecipitationProbability.high)} %</div>
 <div>Distance: ${Math.round(d.distanceMiles)} miles</div>
 </div>`).join("\n");
 
