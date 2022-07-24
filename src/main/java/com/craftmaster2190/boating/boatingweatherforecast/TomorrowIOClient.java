@@ -1,12 +1,16 @@
 package com.craftmaster2190.boating.boatingweatherforecast;
 
+import java.util.function.Supplier;
+import javax.annotation.PostConstruct;
 import lombok.*;
 import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.*;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.*;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.retry.Retry;
 
 import java.time.*;
@@ -24,6 +28,17 @@ public class TomorrowIOClient {
   private final BoatingWeatherAppConfig appConfig;
   private final CacheService cacheService;
 
+  private final RedissonClient redissonClient;
+
+  private RRateLimiter rateLimiter;
+
+  @PostConstruct
+  public void init() {
+    RRateLimiter rateLimiter = redissonClient.getRateLimiter(TomorrowIOClient.class.getName());
+    rateLimiter.setRate(RateType.OVERALL, 1, 1, RateIntervalUnit.SECONDS);
+    this.rateLimiter = rateLimiter;
+  }
+
   public Mono<List<Forecast>> getForecast(UtahLocation utahLocation) {
     val cacheKey = REDIS_PREFIX + utahLocation.name();
     {
@@ -34,66 +49,72 @@ public class TomorrowIOClient {
     }
 
     val start = Instant.now();
-    log.info("START getForecast({})", utahLocation);
-    final LatLong location = utahLocation.getLocation();
-    return webClient
-        .get()
-        .uri(String.format(
-            "%s?location=%s,%s&fields=temperature,windSpeed,precipitationProbability&timesteps=1h,1d&units=metric&apikey=%s",
-            TOMORROW_API_URI,
-            location.getLatitude(),
-            location.getLongitude(),
-            appConfig.getTomorrowIoAccessKey()))
-        .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
-        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-        .exchangeToMono(clientResponse -> {
-          if (!clientResponse.statusCode().isError()) {
-            return clientResponse.bodyToMono(TomorrowIOResponse.class);
-          }
-          return clientResponse
-              .toBodilessEntity()
-              .flatMap(result -> Optional
-                  .ofNullable(result.getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
-                  .map(Integer::parseUnsignedInt)
-                  .filter(retrySeconds -> retrySeconds < 30)
-                  .map(retrySeconds -> {
-                    val sleepDelay = Duration.ofSeconds(retrySeconds);
-                    log.info("getForecast SLEEPING {} to make TomorrowIO API rate limiting happy.", sleepDelay);
-                    return Mono
-                        .<TomorrowIOResponse>error(WebClientResponseException.create(clientResponse.rawStatusCode(),
-                            clientResponse.statusCode().getReasonPhrase(),
-                            result.getHeaders(),
-                            null,
-                            null))
-                        .delayElement(sleepDelay);
-                  })
-                  .orElseGet(Mono::empty));
-        })
-        .retryWhen(Retry.max(1))
-        .onErrorResume(throwable -> {
-          if (throwable instanceof WebClientResponseException) {
-            val webClientResponseException = (WebClientResponseException) throwable;
-            log.error("Error Response {} Headers: {} {}",
-                webClientResponseException.getStatusCode(),
-                webClientResponseException.getHeaders(),
-                webClientResponseException.getResponseBodyAsString());
-          }
-          return Mono.empty();
-        })
-        .map(this::transform)
-        .doOnSuccess(value -> {
-          cacheService.put(cacheKey, value);
-          log.info("DONE getForecast({}) {}", utahLocation, Duration.between(start, Instant.now()));
-        })
-        .flatMap(value -> {
-          val duration = Duration.between(start, Instant.now());
-          val oneSecond = Duration.ofSeconds(1);
-          if (duration.compareTo(oneSecond) < 0) {
-            final Duration sleepDelay = oneSecond.minus(duration);
-            log.info("getForecast SLEEPING {} to make TomorrowIO API rate limiting happy.", sleepDelay);
-            return Mono.just(value).delayElement(sleepDelay); // Add delay to make TomorrowIO RateLimiting happy
-          }
-          return Mono.just(value);
+    log.info("WAIT_RATE_LIMITER getForecast({})", utahLocation);
+    return Mono.<Void>fromRunnable(() -> rateLimiter.acquire())
+        .subscribeOn(Schedulers.boundedElastic())
+        .flatMap((ignored) -> {
+          log.info("START getForecast({})", utahLocation);
+          final LatLong location = utahLocation.getLocation();
+
+          return webClient
+              .get()
+              .uri(String.format(
+                  "%s?location=%s,%s&fields=temperature,windSpeed,precipitationProbability&timesteps=1h,1d&units=metric&apikey=%s",
+                  TOMORROW_API_URI,
+                  location.getLatitude(),
+                  location.getLongitude(),
+                  appConfig.getTomorrowIoAccessKey()))
+              .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+              .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+              .exchangeToMono(clientResponse -> {
+                if (!clientResponse.statusCode().isError()) {
+                  return clientResponse.bodyToMono(TomorrowIOResponse.class);
+                }
+                return clientResponse
+                    .toBodilessEntity()
+                    .flatMap(result -> Optional
+                        .ofNullable(result.getHeaders().getFirst(HttpHeaders.RETRY_AFTER))
+                        .map(Integer::parseUnsignedInt)
+                        .filter(retrySeconds -> retrySeconds < 30)
+                        .map(retrySeconds -> {
+                          val sleepDelay = Duration.ofSeconds(retrySeconds);
+                          log.info("getForecast SLEEPING {} to make TomorrowIO API rate limiting happy.", sleepDelay);
+                          return Mono
+                              .<TomorrowIOResponse>error(WebClientResponseException.create(clientResponse.rawStatusCode(),
+                                  clientResponse.statusCode().getReasonPhrase(),
+                                  result.getHeaders(),
+                                  null,
+                                  null))
+                              .delayElement(sleepDelay);
+                        })
+                        .orElseGet(Mono::empty));
+              })
+              .retryWhen(Retry.max(1))
+              .onErrorResume(throwable -> {
+                if (throwable instanceof WebClientResponseException) {
+                  val webClientResponseException = (WebClientResponseException) throwable;
+                  log.error("Error Response {} Headers: {} {}",
+                      webClientResponseException.getStatusCode(),
+                      webClientResponseException.getHeaders(),
+                      webClientResponseException.getResponseBodyAsString());
+                }
+                return Mono.empty();
+              })
+              .map(this::transform)
+              .doOnSuccess(value -> {
+                cacheService.put(cacheKey, value);
+                log.info("DONE getForecast({}) {}", utahLocation, Duration.between(start, Instant.now()));
+              })
+              .flatMap(value -> {
+                val duration = Duration.between(start, Instant.now());
+                val oneSecond = Duration.ofSeconds(1);
+                if (duration.compareTo(oneSecond) < 0) {
+                  final Duration sleepDelay = oneSecond.minus(duration);
+                  log.info("getForecast SLEEPING {} to make TomorrowIO API rate limiting happy.", sleepDelay);
+                  return Mono.just(value).delayElement(sleepDelay); // Add delay to make TomorrowIO RateLimiting happy
+                }
+                return Mono.just(value);
+              });
         });
   }
 
