@@ -12,11 +12,21 @@ const getLocationPromise = () => {
 const DAY_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 async function main() {
+    jQuery(".button-logan").click(() => getFor("41.73853621944938", "-111.83359421547772"));
+    jQuery(".button-salt-lake-city").click(() => getFor("40.66762793905019", "-111.95243078022585"));
+    jQuery(".button-cedar-city").click(() => getFor("37.72735784248237", "-113.05370254451867"));
+
     const position = await getLocationPromise();
-    console.log(position.coords);
-    const response = await fetch(`best?results=8&latitude=${position.coords.latitude}&longitude=${position.coords.longitude}`);
+    return getFor(position.coords.latitude, position.coords.longitude)
+}
+
+async function getFor(latitude, longitude) {
+    const allButtons = jQuery("button");
+    jQuery(".loading-text").text("Loading").show()
+    allButtons.attr('disabled','disabled');
+    console.log(latitude, longitude);
+    const response = await fetch(`best?results=8&latitude=${latitude}&longitude=${longitude}`);
     const body = await response.json();
-    // console.log(body);
     Object.keys(body).sort()
         .map(date => {
             const dayOfWeek = DAY_OF_WEEK[new Date(date + "T00:00:00").getDay()];
@@ -33,13 +43,14 @@ async function main() {
 <div>Distance: ${Math.round(d.distanceMiles)} miles</div>
 </div>`).join("\n");
 
-            jQuery("body").append(`<div class="date">
+            jQuery(".content").append(`<div class="date">
 <h1>${date}</h1>
 <h2>${dayOfWeek}</h2>
 ${lakes}
 </div>`);
         });
-    jQuery(".loading").remove();
+    jQuery(".loading").hide();
+    allButtons.removeAttr('disabled');
 }
 
 function docReady(fn) {
