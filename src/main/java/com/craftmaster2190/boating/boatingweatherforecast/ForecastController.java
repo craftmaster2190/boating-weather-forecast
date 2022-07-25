@@ -57,8 +57,8 @@ public class ForecastController {
     val forecastResponse = new ForecastResponse().setUtahLocation(utahLocation);
 
     return Flux
-        .concat(tomorrowIOClient.getForecast(utahLocation).doOnSuccess(forecastResponse::setWeatherForecast),
-            lakeMonsterClient.getCurrentConditions(utahLocation).doOnSuccess(forecastResponse::setWaterConditions))
+        .concat(lakeMonsterClient.getCurrentConditions(utahLocation).doOnSuccess(forecastResponse::setWaterConditions),
+            tomorrowIOClient.getForecast(utahLocation).doOnSuccess(forecastResponse::setWeatherForecast))
         .collectList()
         .thenReturn(forecastResponse);
   }
@@ -160,7 +160,9 @@ public class ForecastController {
                       .map(this::score)
                       .sorted(Comparator.comparingDouble(ScoredForecastResponse::getScore).reversed())
                       .collect(Collectors.toList()),
-                  (a, b) -> {throw new IllegalStateException("Two identical keys!");},
+                  (a, b) -> {
+                    throw new IllegalStateException("Two identical keys!");
+                  },
                   TreeMap::new));
         });
   }

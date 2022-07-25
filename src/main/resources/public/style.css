@@ -12,13 +12,14 @@
 .date {
     display: flex;
     flex-direction: column;
-    padding: 12px 12px 32px;
+    padding: 4px 4px 32px;
     white-space: nowrap;
 }
 
 h1, h2, h3 {
     margin-bottom: 0;
     white-space: nowrap;
+    padding: 0 12px;
 }
 
 h2 {
@@ -30,6 +31,12 @@ h2 {
     display: flex;
     flex-direction: column;
     white-space: nowrap;
+    padding: 0 12px;
+}
+
+.lake.top-score {
+    background: lightgreen;
+    border-radius: 8px;
 }
 
 .loading {
@@ -39,7 +46,7 @@ h2 {
     line-height: 80px;
     color: white;
     padding: 26px;
-    margin: 32px;
+    margin: 128px 32px 32px;
     display: block;
 }
 

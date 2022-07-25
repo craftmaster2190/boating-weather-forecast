@@ -30,12 +30,12 @@ public class TomorrowIOClient {
 
   private final RedissonClient redissonClient;
 
-  private RRateLimiter rateLimiter;
+  private RRateLimiterReactive rateLimiter;
 
   @PostConstruct
   public void init() {
-    RRateLimiter rateLimiter = redissonClient.getRateLimiter(TomorrowIOClient.class.getName());
-    rateLimiter.setRate(RateType.OVERALL, 1, 1, RateIntervalUnit.SECONDS);
+    RRateLimiterReactive rateLimiter = redissonClient.reactive().getRateLimiter(TomorrowIOClient.class.getName());
+    rateLimiter.setRate(RateType.OVERALL, 1, 1, RateIntervalUnit.SECONDS).block();
     this.rateLimiter = rateLimiter;
   }
 
@@ -50,9 +50,8 @@ public class TomorrowIOClient {
 
     val start = Instant.now();
     log.info("WAIT_RATE_LIMITER getForecast({})", utahLocation);
-    return Mono.<Void>fromRunnable(() -> rateLimiter.acquire())
-        .subscribeOn(Schedulers.boundedElastic())
-        .flatMap((ignored) -> {
+    return rateLimiter.acquire()
+        .then(Mono.defer(() -> {
           log.info("START getForecast({})", utahLocation);
           final LatLong location = utahLocation.getLocation();
 
@@ -115,7 +114,7 @@ public class TomorrowIOClient {
                 }
                 return Mono.just(value);
               });
-        });
+        }));
   }
 
   public List<Forecast> transform(TomorrowIOResponse tomorrowIOResponse) {

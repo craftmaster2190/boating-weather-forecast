@@ -27,13 +27,18 @@ async function getFor(latitude, longitude) {
     console.log(latitude, longitude);
     const response = await fetch(`best?results=8&latitude=${latitude}&longitude=${longitude}`);
     const body = await response.json();
+    jQuery(".content").empty()
+    let maxScore = Number.MIN_SAFE_INTEGER;
+    Object.keys(body).forEach(date => body[date].forEach(d => maxScore = maxScore > d.score ? maxScore : Math.round(d.score)))
+    console.log("maxScore=", maxScore)
+
     Object.keys(body).sort()
         .map(date => {
             const dayOfWeek = DAY_OF_WEEK[new Date(date + "T00:00:00").getDay()];
 
             const data = body[date];
 
-            const lakes = data.map(d => `<div class="lake">
+            const lakes = data.map(d => `<div class="lake${Math.round(d.score) === maxScore ? ' top-score' : ''}">
 <h3>${d.name}</h3>
 <div>Score: ${Math.round(d.score)}</div>
 <div>Air Temp: ${Math.round(d.highLowF.low)}-${Math.round(d.highLowF.high)}&deg; F</div>
